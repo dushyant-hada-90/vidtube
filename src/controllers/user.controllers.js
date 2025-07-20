@@ -1,7 +1,7 @@
 import {asyncHandler} from "../utils/asyncHandler.js"
 import {ApiError} from "../utils/ApiError.js"
 import {User} from "../models/user.models.js"
-import { uploadOnCloudinary,deleteFromCloudinary } from "../utils/cloudinary.js"
+import { uploadOnCloudinary,deleteFromCloudinary,extractPublicIdFromUrl } from "../utils/cloudinary.js"
 import {ApiResponse} from "../utils/ApiResponse.js"
 import  jwt  from "jsonwebtoken";
 
@@ -21,6 +21,39 @@ const generateAccessAndRefreshToken = async (userId)=>{
         
     }
 }
+
+const refreshAccessToken = asyncHandler(async(req,res)=>{
+    const incomingRefreshToken = req.cookies.refreshToken || req.body.refreshToken
+    if(!incomingRefreshToken){
+        throw new ApiError(401,"refresh token is required");
+    }
+    try {
+        const decodedToken = jwt.verify(
+            incomingRefreshToken,
+            process.env.REFRESH_TOKEN_SECRET
+        )
+        const user = await User.findById(decodedToken?._id)
+        if(!user){throw new ApiError(401,"invalid refresh token");
+        }
+        if(incomingRefreshToken!==user?.refreshToken){throw new ApiError(401,"invalid refresh token");
+        }
+
+        const options = {
+        httpOnly:true,
+        secure:process.env.NODE_ENV==="production"
+        }
+
+        const {accessToken,refreshToken:newRefreshToken} = await generateAccessAndRefreshToken(user._id)
+        return res
+        .status(200)
+        .cookie("accessToken",accessToken,options)
+        .cookie("newRefreshToken",newRefreshToken,options)
+        .json(new ApiResponse(200,{accessToken,newRefreshToken},"access token refreshed successfully"))
+    } catch (error) {
+         throw new ApiError("something went wrog while refreshing token");
+         
+    }
+})
 
 const registerUser = asyncHandler(async(req,res)=>{
     const {fullname,email,username,password}=req.body
@@ -170,38 +203,117 @@ const logoutUser = asyncHandler(async(req,res)=>{
     .json(new ApiResponse(200,"User logged out successfully"))
 })
 
-const refreshAccessToken = asyncHandler(async(req,res)=>{
-    const incomingRefreshToken = req.cookies.refreshToken || req.body.refreshToken
-    if(!incomingRefreshToken){
-        throw new ApiError(401,"refresh token is required");
-    }
-    try {
-        const decodedToken = jwt.verify(
-            incomingRefreshToken,
-            process.env.REFRESH_TOKEN_SECRET
-        )
-        const user = await User.findById(decodedToken?._id)
-        if(!user){throw new ApiError(401,"invalid refresh token");
-        }
-        if(incomingRefreshToken!==user?.refreshToken){throw new ApiError(401,"invalid refresh token");
-        }
+const changeCurrentPassword = asyncHandler(async(req,res)=>{
+    const {oldPassword,newPassword} = req.body
 
-        const options = {
-        httpOnly:true,
-        secure:process.env.NODE_ENV==="production"
-        }
+    const user = await User.findById(req.user?._id)
+    const isPasswordValid = await user.isPasswordCorrect(oldPassword)
 
-        const {accessToken,refreshToken:newRefreshToken} = await generateAccessAndRefreshToken(user._id)
-        return res
-        .status(200)
-        .cookie("accessToken",accessToken,options)
-        .cookie("newRefreshToken",newRefreshToken,options)
-        .json(new ApiResponse(200,{accessToken,newRefreshToken},"access token refreshed successfully"))
-    } catch (error) {
-         throw new ApiError("something went wrog while refreshing token");
-         
+    if(!isPasswordValid){
+        throw new ApiError("old password is incorrect");
     }
+    user.password = newPassword
+    await user.save({validateBeforeSave:false})
+
+    return res.status(200).json(new ApiResponse(200,"password changed successfully"))
 })
 
 
-export{registerUser,loginUser,refreshAccessToken,logoutUser}
+const getCurrentUser = asyncHandler(async(req,res)=>{
+    return res.status(200,json(new ApiResponse(200,req.user,"current user details")))
+})
+
+const updateAccountDetails = asyncHandler(async(req,res)=>{
+    const {fullname,email} = req.body
+
+    if(!fullname && !email){
+        throw new ApiError("at least provide one of email,fullname that you wish to update");
+    }
+    const updateData = {}
+    if(fullname) updateData.fullname=fullname
+    if(email) updateData.email=email
+    
+    const updatedUser = await User.findByIdAndUpdate(
+        req.user?._id,{$set:updateData},{new:true}).select("-password -refreshToken")
+    
+    return res.status(200).json(new ApiResponse(200,updatedUser,"updated user account details"))
+})
+
+const updateUserAvatar = asyncHandler(async(req,res)=>{
+    let user
+    let avatar
+     
+    const oldUser = await User.findById(req.user?._id).select("avatar")
+    // console.log(oldUser);
+    
+    const oldPublicId = await extractPublicIdFromUrl(oldUser?.avatar)
+    
+    // upload new avatar on cloudinary
+    const avatarLocalPath = req.file?.path 
+    avatar = await uploadOnCloudinary(avatarLocalPath)
+    if(avatar===null){throw new ApiError(400,"file is required");
+    }
+    if(!avatar.url){throw new ApiError(500,"something went wrong while uploading avatar");
+    }
+    //update new cloudinary url in mongo db
+    try {
+        user = await User.findByIdAndUpdate(req.user?._id,{$set:{avatar:avatar.url}},{new:true}).select("-password -refreshToken")
+    } catch (error) {
+        if(avatar?.public_id){await deleteFromCloudinary(avatar.public_id)}
+        throw new ApiError(500,"could not update avatar");
+    }
+
+    let oldAvatarDeletion = await deleteFromCloudinary(oldPublicId)  //do at the end  only if new avatar is uploaded successfully
+    console.log(oldAvatarDeletion.result);
+
+    res.status(200).json(new ApiResponse(200,user,oldAvatarDeletion.result!=="ok"
+      ? "Avatar updated, but failed to delete old avatar"
+      : "Avatar updated successfully"))
+
+})
+
+const updateUserCoverImage = asyncHandler(async(req,res)=>{
+    let user
+    let coverImage
+     
+    const oldUser = await User.findById(req.user?._id).select("coverImage")
+    // console.log(oldUser);
+    
+    const oldPublicId = await extractPublicIdFromUrl(oldUser?.coverImage)
+    
+    // upload new coverImage on cloudinary
+    const coverLocalPath = req.file?.path 
+    coverImage = await uploadOnCloudinary(coverLocalPath)
+    if(coverImage===null){throw new ApiError(400,"file is required");
+    }
+    if(!coverImage.url){throw new ApiError(500,"something went wrong while uploading coverImage");
+    }
+    //update new cloudinary url in mongo db
+    try {
+        user = await User.findByIdAndUpdate(req.user?._id,{$set:{coverImage:coverImage.url}},{new:true}).select("-password -refreshToken")
+    } catch (error) {
+        if(coverImage?.public_id){await deleteFromCloudinary(coverImage.public_id)}
+        throw new ApiError(500,"could not update .coverImage.r");
+    }
+2
+    let oldCoverImageDeletion = await deleteFromCloudinary(oldPublicId)  //do at the end  only if new avatar is uploaded successfully
+    // console.log(oldCoverImageDeletion.result);
+
+    res.status(200).json(new ApiResponse(200,user,oldCoverImageDeletion.result!=="ok"
+      ? "coverImage updated, but failed to delete old coverImage"
+      : "coverImage updated successfully"))
+})
+
+
+
+
+export{registerUser,
+    loginUser,
+    refreshAccessToken,
+    logoutUser,
+    updateAccountDetails,
+    changeCurrentPassword,
+    getCurrentUser,
+    updateUserAvatar,
+    updateUserCoverImage,
+}

@@ -1,6 +1,7 @@
 import { v2 as cloudinary } from 'cloudinary';
 import fs from "fs"
 import dotenv from "dotenv"
+import { ApiError } from './ApiError.js';
 
 dotenv.config()
 // Configuration
@@ -24,7 +25,7 @@ const uploadOnCloudinary = async (localFilePath)=>{
         console.log(error);
         
         fs.unlinkSync(localFilePath)
-        return null
+        
     }
 }
 
@@ -32,10 +33,26 @@ const deleteFromCloudinary = async(publicId)=>{
     try {
         const result = await cloudinary.uploader.destroy(publicId)
         console.log("deleted from cloudinary. publicId: ",publicId);
-        
+        return result  // will return {result:"ok"} or { result: 'not found' }
     } catch (error) {
         console.log("error deleting from cloudinary",error);
         
     }
 }
-export {uploadOnCloudinary,deleteFromCloudinary}
+
+
+const extractPublicIdFromUrl = async(url)=>{
+    try {
+        const parts = url.split("/upload/")[1]
+        const pathWothoutVersion = parts.split("/").slice(1).join("/")
+        const publicId = pathWothoutVersion.replace(/\.[^/.]+$/,"")
+        return publicId
+
+    } catch (error) {
+        console.warn("could not extract public id from old cloudinary url",error)
+    }
+}
+export {uploadOnCloudinary,          
+        deleteFromCloudinary,
+        extractPublicIdFromUrl
+}
