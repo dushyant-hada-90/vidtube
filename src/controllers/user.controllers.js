@@ -4,6 +4,7 @@ import {User} from "../models/user.models.js"
 import { uploadOnCloudinary,deleteFromCloudinary,extractPublicIdFromUrl } from "../utils/cloudinary.js"
 import {ApiResponse} from "../utils/ApiResponse.js"
 import  jwt  from "jsonwebtoken";
+import mongoose from "mongoose"
 
 const generateAccessAndRefreshToken = async (userId)=>{
     try {
@@ -304,8 +305,127 @@ const updateUserCoverImage = asyncHandler(async(req,res)=>{
       : "coverImage updated successfully"))
 })
 
+const getUserChannelProfile = asyncHandler(async(req,res)=>{
 
+    
+    const {username} = req.params
+    if(!username?.trim()){
+        throw new ApiError(400,"username is required");
+    }
 
+    const channel = await User.aggregate(
+        [
+            {
+                $match:{
+                    username:username.toLowerCase()
+                }
+            },
+
+            {
+                $lookup:{
+                    from:"subscriptions",
+                    localField:"_id",
+                    foreignField:"channel",
+                    as:"subscribers" //these people have subscribed to my channel
+                }
+            },
+
+            {
+                $lookup:{
+                    from:"subscriptons",
+                    localField:"_id",
+                    foreignField:"subscriber",
+                    as:"subscribedTo" //these are channels i have subscribed to
+                }
+            },
+
+            {
+                $addFields:{
+                    subscribersCount:{
+                        $size:"$subscribers"
+                    },
+                    channelsSubscribedTo:{
+                        $size:"$subscribedTo"
+                    },
+                    isSubscribed:{
+                        $cond:[{$in:[req.user?._id,"$subscribers.subscriber"]},
+                        true,
+                        false]
+                    }
+                }
+            },
+
+            {
+                $project:{
+                    fullname:1,
+                    username:1,
+                    avatar:1,
+                    subscribersCount:1,
+                    channelsSubscribedTo:1,
+                    isSubscribed:1,
+                    coverImage:1,
+                    email:1
+
+                }
+            }
+        ]
+    )
+
+    if(!channel.length)throw new ApiError(404,"channel not found");
+
+    return res.status(200).json(new ApiResponse(200,channel[0],"channel profile fetched successfully"))
+    
+})
+
+const getwatchHistory = asyncHandler(async(req,res)=>{
+    const user = await User.aggregate([
+        {
+            $match:{
+                _id: new mongoose.Types.ObjectId(req.user?._id)
+            },
+
+            
+        },
+
+        {
+            $lookup:{
+                from:"videos",
+                localField:"watchHistory",
+                foreignField:"_id",
+                as:"watchHistoryDetails",
+                pipeline:[
+                    {
+                        $lookup:{
+                            from:"users",
+                            localField:"owner",
+                            foreignField:"_id",
+                            as:"owner",
+                            pipeline:[
+                                {
+                                    $project:{
+                                        fullname:1,
+                                        username:1,
+                                        avatar:1
+                                    }
+                                }
+                            ]
+                        }
+                    },
+
+                    {
+                        $addFields:{
+                            owner:{
+                                $first : "$owner"
+                            }
+                        }
+                    }
+                ]
+            }
+        }
+    ])
+
+    return res.status(200).json(new ApiResponse(200,user[0]?.watchHistoryDetails,"watch history fetched successfully"))
+})
 
 export{registerUser,
     loginUser,
@@ -316,4 +436,6 @@ export{registerUser,
     getCurrentUser,
     updateUserAvatar,
     updateUserCoverImage,
+    getUserChannelProfile,
+    getwatchHistory
 }

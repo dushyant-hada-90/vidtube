@@ -7,7 +7,9 @@ import {registerUser ,
         changeCurrentPassword,
         updateUserAvatar,
         updateUserCoverImage,
-        refreshAccessToken,} from "../controllers/user.controllers.js";
+        refreshAccessToken,
+        getUserChannelProfile,
+        getwatchHistory} from "../controllers/user.controllers.js";
 
 import {upload} from "../middlewares/multer.middlewares.js"
 
@@ -27,16 +29,22 @@ router.route("/register").post(
     ]),
     registerUser)
 
-// secure routes
+// unsecure routes
 router.route("/login").post(loginUser)
-router.route("/logout").post(verifyJWT,logoutUser)
+router.route("/refreshAccessToken").post(refreshAccessToken)
 
-// updation routes
-router.route("/updateAccountDetails").post(verifyJWT,updateAccountDetails)
+// secure routes
+router.route("/logout").post(verifyJWT,logoutUser)
+router.route("/updateAccountDetails").patch(verifyJWT,updateAccountDetails)
 router.route("/changeCurrentPassword").post(verifyJWT,changeCurrentPassword)
 router.route("/updateUserAvatar").post(verifyJWT,upload.single("avatar"), updateUserAvatar) 
 router.route("/updateUserCoverImage").post(verifyJWT,upload.single("coverImage"),updateUserCoverImage)
 
 //tokens
-router.route("/refreshAccessToken").post(refreshAccessToken)
+
+
+//query routes
+router.route("/getUserChannelProfile/:username").post(verifyJWT,getUserChannelProfile)
+
+router.route("/getwatchHistory").get(verifyJWT,getwatchHistory)
 export default router
